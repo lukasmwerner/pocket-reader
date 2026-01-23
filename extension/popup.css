@@ -75,6 +75,10 @@ h1 {
   animation: pulse 1s infinite;
 }
 
+.status-ready .status-dot {
+  background: var(--primary-color);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }

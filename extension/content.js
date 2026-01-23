@@ -1,10 +1,8 @@
 /**
  * Pocket Reader - Content Script
  * Extracts main content from web pages and handles audio playback
- * Uses prefetching to generate next paragraph while current one plays
+ * Uses WASM-based TTS that runs entirely in the browser
  */
-
-const SERVER_URL = 'http://localhost:5050';
 
 // Audio playback state
 let audioContext = null;
@@ -22,6 +20,10 @@ let totalParagraphs = 0;
 let selectionAudioContext = null;
 let selectionAudioSource = null;
 let isReadingSelection = false;
+
+// TTS Engine state
+let ttsInitialized = false;
+let ttsInitializing = false;
 
 /**
  * Get or create the audio context
@@ -56,7 +58,7 @@ const HIGHLIGHT_STYLE_ID = 'pocket-reader-styles';
  */
 function injectHighlightStyles() {
   if (document.getElementById(HIGHLIGHT_STYLE_ID)) return;
-  
+
   const style = document.createElement('style');
   style.id = HIGHLIGHT_STYLE_ID;
   style.textContent = `
@@ -79,16 +81,16 @@ function highlightElement(element) {
   if (currentHighlightedElement) {
     currentHighlightedElement.classList.remove(HIGHLIGHT_CLASS);
   }
-  
+
   if (element) {
     element.classList.add(HIGHLIGHT_CLASS);
     currentHighlightedElement = element;
-    
+
     // Scroll element into view smoothly
     element.scrollIntoView({
       behavior: 'smooth',
       block: 'center',
-      inline: 'nearest'
+      inline: 'nearest',
     });
   }
 }
@@ -137,21 +139,30 @@ function findContentContainer() {
 function isExcludedElement(element) {
   const excludedTags = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'NAV', 'HEADER', 'FOOTER', 'ASIDE'];
   if (excludedTags.includes(element.tagName)) return true;
-  
+
   const excludedClasses = [
-    'sidebar', 'navigation', 'menu', 'comments', 'comment',
-    'advertisement', 'ad', 'ads', 'social-share', 'share-buttons',
-    'related-posts', 'recommended'
+    'sidebar',
+    'navigation',
+    'menu',
+    'comments',
+    'comment',
+    'advertisement',
+    'ad',
+    'ads',
+    'social-share',
+    'share-buttons',
+    'related-posts',
+    'recommended',
   ];
-  
-  const classList = Array.from(element.classList).map(c => c.toLowerCase());
-  if (excludedClasses.some(exc => classList.includes(exc))) return true;
-  
+
+  const classList = Array.from(element.classList).map((c) => c.toLowerCase());
+  if (excludedClasses.some((exc) => classList.includes(exc))) return true;
+
   const role = element.getAttribute('role');
   if (['navigation', 'banner', 'complementary'].includes(role)) return true;
-  
+
   if (element.getAttribute('aria-hidden') === 'true') return true;
-  
+
   return false;
 }
 
@@ -160,10 +171,12 @@ function isExcludedElement(element) {
  */
 function isVisible(element) {
   const style = window.getComputedStyle(element);
-  return style.display !== 'none' && 
-         style.visibility !== 'hidden' && 
-         style.opacity !== '0' &&
-         element.offsetParent !== null;
+  return (
+    style.display !== 'none' &&
+    style.visibility !== 'hidden' &&
+    style.opacity !== '0' &&
+    element.offsetParent !== null
+  );
 }
 
 /**
@@ -173,12 +186,12 @@ function isVisible(element) {
 function extractReadableElements() {
   const container = findContentContainer();
   const elements = [];
-  
+
   // Selectors for readable content blocks
   const readableSelectors = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th, dt, dd, pre';
-  
+
   const candidates = container.querySelectorAll(readableSelectors);
-  
+
   for (const element of candidates) {
     // Skip if inside an excluded parent
     let parent = element.parentElement;
@@ -191,37 +204,37 @@ function extractReadableElements() {
       parent = parent.parentElement;
     }
     if (excluded) continue;
-    
+
     // Skip if element itself is excluded
     if (isExcludedElement(element)) continue;
-    
+
     // Skip if not visible
     if (!isVisible(element)) continue;
-    
+
     // Get text content
     const text = (element.innerText || element.textContent || '').trim();
-    
+
     // Skip empty or very short elements
     if (text.length < 10) continue;
-    
+
     // Skip if this element's text is entirely contained in a child we'll process later
     // (avoid reading the same content twice)
     const childReadables = element.querySelectorAll(readableSelectors);
     if (childReadables.length > 0) {
       const childText = Array.from(childReadables)
-        .map(c => (c.innerText || '').trim())
+        .map((c) => (c.innerText || '').trim())
         .join('');
       if (childText.length >= text.length * 0.9) {
         continue; // Skip parent, children will cover the content
       }
     }
-    
+
     elements.push({
       element: element,
-      text: text
+      text: text,
     });
   }
-  
+
   return elements;
 }
 
@@ -231,14 +244,14 @@ function extractReadableElements() {
  */
 function extractMainContent() {
   const elements = extractReadableElements();
-  const texts = elements.map(e => e.text);
-  
+  const texts = elements.map((e) => e.text);
+
   // Prepend title
   const title = getPageTitle();
   if (title) {
     texts.unshift(title);
   }
-  
+
   return texts.join('\n\n');
 }
 
@@ -267,7 +280,7 @@ function saveReadingPosition(paragraphIndex, total) {
     positions[url] = {
       index: paragraphIndex,
       total: total,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
     chrome.storage.local.set({ readingPositions: positions });
   });
@@ -334,7 +347,7 @@ async function playAudioBlob(audioBlob, onReadyToPrefetch) {
       const duration = audioBuffer.duration;
 
       // Set up prefetch timer (at 70% of duration)
-      const prefetchTime = (duration / playbackSpeed) * 0.7 * 1000;
+      const prefetchTime = ((duration / playbackSpeed) * 0.7 * 1000);
       const prefetchTimer = setTimeout(() => {
         prefetchTriggered = true;
         if (onReadyToPrefetch) {
@@ -356,7 +369,6 @@ async function playAudioBlob(audioBlob, onReadyToPrefetch) {
       audioStartTime = context.currentTime;
       audioPauseTime = 0;
       source.start(0);
-
     } catch (error) {
       currentAudioSource = null;
       currentAudioBuffer = null;
@@ -366,39 +378,76 @@ async function playAudioBlob(audioBlob, onReadyToPrefetch) {
 }
 
 /**
- * Synthesize a single paragraph - returns a promise for the audio blob
+ * Initialize the TTS engine if not already done
  */
-async function synthesizeParagraph(text, voice) {
-  const response = await fetch(`${SERVER_URL}/synthesize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Server error');
+async function ensureTTSInitialized(onProgress) {
+  if (ttsInitialized && window.TTSEngine && (await window.TTSEngine.isReady())) {
+    return;
   }
 
-  return await response.blob();
+  if (ttsInitializing) {
+    // Wait for initialization to complete
+    while (ttsInitializing) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return;
+  }
+
+  ttsInitializing = true;
+
+  try {
+    // TTS engine is loaded via manifest content_scripts
+    if (!window.TTSEngine) {
+      console.error('TTSEngine not found on window. Available keys:', Object.keys(window).filter(k => k.includes('TTS')));
+      throw new Error('TTS engine not loaded. Please reload the page and ensure the extension is properly installed.');
+    }
+
+    console.log('Initializing TTS engine...');
+    // Initialize the TTS model
+    await window.TTSEngine.initialize(onProgress);
+    console.log('TTS engine initialized successfully');
+    ttsInitialized = true;
+  } catch (error) {
+    console.error('TTS initialization error:', error);
+    throw error;
+  } finally {
+    ttsInitializing = false;
+  }
 }
 
 /**
- * Get paragraphs from server
+ * Synthesize a single paragraph - returns a promise for the audio blob
  */
-async function getParagraphs(text) {
-  const response = await fetch(`${SERVER_URL}/paragraphs`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-  });
+async function synthesizeParagraph(text, voice, onProgress) {
+  await ensureTTSInitialized(onProgress);
+  return await window.TTSEngine.synthesize(text, voice, onProgress);
+}
 
-  if (!response.ok) {
-    throw new Error('Failed to split text into paragraphs');
+/**
+ * Split text into paragraphs locally (no server needed)
+ */
+function splitIntoParagraphs(text) {
+  // Split on double newlines first
+  let paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+
+  // If we only got one paragraph and it's long, try to split on sentences
+  if (paragraphs.length === 1 && paragraphs[0].length > 500) {
+    const sentences = paragraphs[0].match(/[^.!?]+[.!?]+/g) || [paragraphs[0]];
+    paragraphs = [];
+    let current = '';
+
+    for (const sentence of sentences) {
+      if (current.length + sentence.length > 400) {
+        if (current) paragraphs.push(current.trim());
+        current = sentence;
+      } else {
+        current += sentence;
+      }
+    }
+    if (current) paragraphs.push(current.trim());
   }
 
-  const data = await response.json();
-  return data.paragraphs;
+  return paragraphs;
 }
 
 /**
@@ -425,6 +474,21 @@ async function readParagraphsFromIndex(paragraphs, voice, startIndex = 0, speed 
   const remaining = total - startIndex;
 
   try {
+    // Initialize TTS first
+    notifyExtension({
+      action: 'progress',
+      percent: 5,
+      text: 'Loading TTS engine...',
+    });
+
+    await ensureTTSInitialized((status, message) => {
+      notifyExtension({
+        action: 'progress',
+        percent: status === 'ready' ? 10 : 5,
+        text: message,
+      });
+    });
+
     notifyExtension({
       action: 'progress',
       percent: 10,
@@ -435,8 +499,8 @@ async function readParagraphsFromIndex(paragraphs, voice, startIndex = 0, speed 
     const prefetchedAudio = new Map();
 
     // Get text from paragraph (handles both string and object formats)
-    const getText = (para) => typeof para === 'string' ? para : para.text;
-    
+    const getText = (para) => (typeof para === 'string' ? para : para.text);
+
     // Get element for highlighting
     const getElement = (para) => {
       if (typeof para === 'object' && para.elementIndex !== undefined) {
@@ -497,7 +561,7 @@ async function readParagraphsFromIndex(paragraphs, voice, startIndex = 0, speed 
         current: i + 1,
         total: total,
       });
-      
+
       // Save current position for this URL
       saveReadingPosition(i, total);
 
@@ -543,7 +607,7 @@ async function readText(text, voice, speed = 1.0) {
   try {
     notifyExtension({ action: 'progress', percent: 5, text: 'Splitting into paragraphs...' });
 
-    const paragraphs = await getParagraphs(text);
+    const paragraphs = splitIntoParagraphs(text);
 
     if (shouldStop) return;
 
@@ -663,6 +727,9 @@ async function speakSelection(voice, speed) {
 
     isReadingSelection = true;
 
+    // Initialize TTS if needed
+    await ensureTTSInitialized();
+
     // Synthesize the selected text
     const audioBlob = await synthesizeParagraph(selectedText, voice);
 
@@ -694,17 +761,25 @@ async function speakSelection(voice, speed) {
 
     // Start playback
     source.start(0);
-
   } catch (error) {
     isReadingSelection = false;
-    selectionAudio = null;
+    selectionAudioSource = null;
     console.error('Error speaking selection:', error);
+    alert('Error: ' + error.message);
+  }
+}
 
-    if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-      alert('Could not connect to TTS server. Make sure the server is running at http://localhost:5050');
-    } else {
-      alert('Error: ' + error.message);
+/**
+ * Check if TTS engine is ready
+ */
+async function checkTTSStatus() {
+  try {
+    if (window.TTSEngine && window.TTSEngine.isReady()) {
+      return { ready: true };
     }
+    return { ready: false, status: 'not_initialized' };
+  } catch (error) {
+    return { ready: false, status: 'error', error: error.message };
   }
 }
 
@@ -738,23 +813,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Extract readable elements and store references for highlighting
     try {
       readableElements = extractReadableElements();
-      
+
       // Return just the text for each element (we keep element refs locally)
       const paragraphs = readableElements.map((item, index) => ({
         text: item.text,
-        elementIndex: index
+        elementIndex: index,
       }));
-      
+
       sendResponse({
         success: true,
         paragraphs: paragraphs,
-        count: paragraphs.length
+        count: paragraphs.length,
       });
     } catch (error) {
       console.error('Error scanning elements:', error);
       sendResponse({
         success: false,
-        error: error.message
+        error: error.message,
       });
     }
   } else if (message.action === 'readText') {
@@ -764,13 +839,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'readParagraphs') {
     // Read pre-scanned paragraphs from a specific index
     // Check if paragraphs have elementIndex (for highlighting)
-    const useHighlighting = message.paragraphs.length > 0 && 
-                            typeof message.paragraphs[0] === 'object' && 
-                            message.paragraphs[0].elementIndex !== undefined;
+    const useHighlighting =
+      message.paragraphs.length > 0 &&
+      typeof message.paragraphs[0] === 'object' &&
+      message.paragraphs[0].elementIndex !== undefined;
     readParagraphsFromIndex(
-      message.paragraphs, 
-      message.voice, 
-      message.startIndex || 0, 
+      message.paragraphs,
+      message.voice,
+      message.startIndex || 0,
       message.speed || 1.0,
       useHighlighting
     );
@@ -794,7 +870,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({
       isPlaying: currentAudioSource !== null && !isPaused,
       isPaused: isPaused,
-      isStopped: currentAudioSource === null
+      isStopped: currentAudioSource === null,
     });
   } else if (message.action === 'getSavedPosition') {
     const url = getNormalizedUrl();
@@ -809,6 +885,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'speakSelection') {
     speakSelection(message.voice, message.speed);
     sendResponse({ status: 'started' });
+  } else if (message.action === 'checkTTSStatus') {
+    checkTTSStatus().then(sendResponse);
+    return true; // Async response
+  } else if (message.action === 'initializeTTS') {
+    ensureTTSInitialized((status, text) => {
+      notifyExtension({ action: 'ttsProgress', status, text });
+    })
+      .then(() => sendResponse({ success: true }))
+      .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true; // Async response
   }
 
   // Return true to indicate async response
@@ -816,4 +902,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Log that content script is loaded
-console.log('Pocket Reader content script loaded');
+console.log('Pocket Reader content script loaded (WASM TTS)');

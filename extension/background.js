@@ -125,13 +125,26 @@ async function startReadingFromShortcut(tab) {
 }
 
 /**
- * Handle messages from popup
+ * Handle messages from popup and TTS worker
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // If message is from content script, forward to popup
   if (sender.tab) {
     // Message from content script - forward to popup
     // The popup listens directly via chrome.runtime.onMessage
+    return;
+  }
+
+  // If message is from TTS worker (has targetInstance), relay to all tabs
+  if (message.targetInstance) {
+    // Broadcast to all tabs - the content script will filter by instanceId
+    chrome.tabs.query({}, (tabs) => {
+      for (const tab of tabs) {
+        chrome.tabs.sendMessage(tab.id, message).catch(() => {
+          // Tab might not have content script, ignore
+        });
+      }
+    });
     return;
   }
 

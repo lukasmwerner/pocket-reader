@@ -1,12 +1,11 @@
 /**
  * Pocket Reader - Popup Script
  * Handles UI interactions and communication with content script
+ * Uses WASM-based TTS - no server required
  */
 
-const SERVER_URL = 'http://localhost:5050';
-
 // DOM Elements
-const serverStatus = document.getElementById('server-status');
+const ttsStatus = document.getElementById('tts-status');
 const voiceSelect = document.getElementById('voice-select');
 const speedControl = document.getElementById('speed-control');
 const speedValue = document.getElementById('speed-value');
@@ -25,7 +24,7 @@ const messageEl = document.getElementById('message');
 // State
 let isPlaying = false;
 let isPaused = false;
-let serverConnected = false;
+let ttsReady = false;
 let currentTabId = null;
 let scannedParagraphs = [];
 
@@ -42,9 +41,6 @@ async function init() {
     speedControl.value = speed;
     speedValue.textContent = `${speed}x`;
   }
-
-  // Check server status
-  await checkServerStatus();
 
   // Set up event listeners
   voiceSelect.addEventListener('change', saveVoicePreference);
@@ -64,45 +60,22 @@ async function init() {
     setPlayingState(true);
   }
 
-  // Auto-scan on open if server is connected
-  if (serverConnected) {
-    handleScan();
-  }
+  // Enable buttons - TTS will load on-demand
+  setTTSStatus('ready', 'Ready (loads on first use)');
+  ttsReady = true;
+  btnRead.disabled = false;
+  btnScan.disabled = false;
+
+  // Auto-scan on open
+  handleScan();
 }
 
 /**
- * Check if the TTS server is running
+ * Update TTS status indicator
  */
-async function checkServerStatus() {
-  try {
-    const response = await fetch(`${SERVER_URL}/health`, {
-      method: 'GET',
-      signal: AbortSignal.timeout(3000)
-    });
-
-    if (response.ok) {
-      setServerStatus('connected', 'Server connected');
-      serverConnected = true;
-      btnRead.disabled = false;
-      btnScan.disabled = false;
-    } else {
-      throw new Error('Server returned error');
-    }
-  } catch (error) {
-    setServerStatus('disconnected', 'Server offline');
-    serverConnected = false;
-    btnRead.disabled = true;
-    btnScan.disabled = true;
-    showMessage('error', 'Server not running. Start it with: uv run server.py');
-  }
-}
-
-/**
- * Update server status indicator
- */
-function setServerStatus(status, text) {
-  serverStatus.className = `status status-${status}`;
-  serverStatus.querySelector('.status-text').textContent = text;
+function setTTSStatus(status, text) {
+  ttsStatus.className = `status status-${status}`;
+  ttsStatus.querySelector('.status-text').textContent = text;
 }
 
 /**
@@ -119,10 +92,10 @@ function handleSpeedChange() {
   const speed = parseFloat(speedControl.value);
   speedValue.textContent = `${speed.toFixed(1)}x`;
   chrome.storage.local.set({ speed: speed });
-  
+
   // Update reading time estimate
   updateReadingTimeDisplay();
-  
+
   // Update current playback speed if playing
   if (currentTabId && isPlaying) {
     chrome.tabs.sendMessage(currentTabId, { action: 'setSpeed', speed: speed }).catch(() => {});
@@ -143,12 +116,12 @@ function truncateText(text, maxLength = 50) {
  */
 function estimateReadingTime(paragraphs, speed = 1.0) {
   // Handle both string arrays and object arrays with {text, elementIndex}
-  const getText = (p) => typeof p === 'string' ? p : p.text;
+  const getText = (p) => (typeof p === 'string' ? p : p.text);
   const totalText = paragraphs.map(getText).join(' ');
-  const wordCount = totalText.split(/\s+/).filter(w => w.length > 0).length;
+  const wordCount = totalText.split(/\s+/).filter((w) => w.length > 0).length;
   const wordsPerMinute = 150 * speed;
   const minutes = wordCount / wordsPerMinute;
-  
+
   if (minutes < 1) {
     return 'Less than 1 min';
   } else if (minutes < 60) {
@@ -168,12 +141,12 @@ function updateReadingTimeDisplay() {
     readingTimeEl.classList.add('hidden');
     return;
   }
-  
+
   const startIndex = parseInt(startPosition.value, 10) || 0;
   const remainingParagraphs = scannedParagraphs.slice(startIndex);
   const speed = parseFloat(speedControl.value);
   const timeEstimate = estimateReadingTime(remainingParagraphs, speed);
-  
+
   readingTimeValue.textContent = `Est. reading time: ${timeEstimate}`;
   readingTimeEl.classList.remove('hidden');
 }
@@ -182,11 +155,6 @@ function updateReadingTimeDisplay() {
  * Handle Scan button click - extract and show paragraphs
  */
 async function handleScan() {
-  if (!serverConnected) {
-    showMessage('error', 'Server not connected');
-    return;
-  }
-
   try {
     btnScan.disabled = true;
     btnScan.textContent = 'Scanning...';
@@ -203,7 +171,7 @@ async function handleScan() {
     try {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        files: ['content.js']
+        files: ['content.js'],
       });
     } catch (e) {
       // Script might already be loaded
@@ -260,7 +228,6 @@ async function handleScan() {
     } catch (e) {
       // Ignore errors in getting saved position
     }
-
   } catch (error) {
     console.error('Scan error:', error);
     showMessage('error', error.message);
@@ -274,11 +241,6 @@ async function handleScan() {
  * Handle Read button click
  */
 async function handleRead() {
-  if (!serverConnected) {
-    showMessage('error', 'Server not connected');
-    return;
-  }
-
   hideMessage();
   setPlayingState(true);
   updateProgress(0, 'Starting...');
@@ -297,7 +259,7 @@ async function handleRead() {
     try {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        files: ['content.js']
+        files: ['content.js'],
       });
     } catch (e) {
       // Script might already be loaded
@@ -315,7 +277,7 @@ async function handleRead() {
         paragraphs: scannedParagraphs,
         startIndex: startIndex,
         voice: voice,
-        speed: speed
+        speed: speed,
       });
     } else {
       // Otherwise extract and read from beginning
@@ -338,7 +300,7 @@ async function handleRead() {
           action: 'readText',
           text: response.text,
           voice: voice,
-          speed: speed
+          speed: speed,
         });
       });
     }
@@ -394,10 +356,7 @@ function handleContentMessage(message, sender) {
     case 'playing':
       setPlayingState(true);
       if (message.total && message.total > 1) {
-        updateProgress(
-          10 + Math.floor((message.current / message.total) * 80),
-          `Playing ${message.current}/${message.total}...`
-        );
+        updateProgress(10 + Math.floor((message.current / message.total) * 80), `Playing ${message.current}/${message.total}...`);
       } else {
         updateProgress(100, 'Playing audio...');
       }
@@ -427,6 +386,14 @@ function handleContentMessage(message, sender) {
       progressContainer.classList.add('hidden');
       showMessage('success', 'Finished reading');
       break;
+
+    case 'ttsProgress':
+      if (message.status === 'loading') {
+        setTTSStatus('checking', message.text);
+      } else if (message.status === 'ready') {
+        setTTSStatus('connected', message.text);
+      }
+      break;
   }
 }
 
@@ -435,7 +402,7 @@ function handleContentMessage(message, sender) {
  */
 function setPlayingState(playing) {
   isPlaying = playing;
-  btnRead.disabled = playing || !serverConnected;
+  btnRead.disabled = playing;
   btnPause.disabled = !playing;
   btnStop.disabled = !playing;
   btnScan.disabled = playing;
@@ -455,7 +422,7 @@ function setPausedState(paused) {
   isPaused = paused;
   const pauseIcon = btnPause.querySelector('.icon');
   const pauseText = btnPause.childNodes[btnPause.childNodes.length - 1];
-  
+
   if (paused) {
     pauseIcon.className = 'icon icon-play';
     pauseText.textContent = 'Resume';

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Pocket Reader TTS Worker</title>
+</head>
+<body>
+  <script>
+    // TTS Worker - runs in extension context to bypass page CSP
+    // Uses chrome.runtime.sendMessage to communicate back to content script
+
+    (async function() {
+      console.log('TTS Worker: Starting');
+
+      // Get instance ID from URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const instanceId = urlParams.get('instance');
+      console.log('TTS Worker: Instance ID:', instanceId);
+
+      // Function to send message back to content script
+      function sendToContentScript(data) {
+        chrome.runtime.sendMessage({
+          targetInstance: instanceId,
+          data: data
+        }).catch(err => {
+          console.error('TTS Worker: Failed to send message:', err);
+        });
+      }
+
+      // Error handler
+      window.onerror = function(msg, url, line) {
+        console.error('TTS Worker error:', msg, url, line);
+        sendToContentScript({ type: 'worker-error', error: String(msg) });
+        return true;
+      };
+
+      let ttsModel = null;
+      let wasmModule = null;
+      let currentVoice = null;
+
+      const HF_REPO = 'kyutai/pocket-tts';
+      const MODEL_WEIGHTS_FILE = 'tts_b6369a24.safetensors';
+
+      const DEFAULT_CONFIG_YAML = `
+flow_lm:
+  dtype: float32
+  flow:
+    depth: 6
+    dim: 512
+  transformer:
+    d_model: 1024
+    hidden_scale: 4
+    max_period: 10000
+    num_heads: 16
+    num_layers: 6
+  lookup_table:
+    dim: 1024
+    n_bins: 4000
+    tokenizer: sentencepiece
+    tokenizer_path: hf://kyutai/pocket-tts-without-voice-cloning/tokenizer.model@d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3
+
+mimi:
+  dtype: float32
+  sample_rate: 24000
+  channels: 1
+  frame_rate: 12.5
+  seanet:
+    dimension: 512
+    channels: 1
+    n_filters: 64
+    n_residual_layers: 1
+    ratios: [6, 5, 4]
+    kernel_size: 7
+    residual_kernel_size: 3
+    last_kernel_size: 3
+    dilation_base: 2
+    pad_mode: constant
+    compress: 2
+  transformer:
+    d_model: 512
+    num_heads: 8
+    num_layers: 2
+    layer_scale: 0.01
+    context: 250
+    dim_feedforward: 2048
+    input_dimension: 512
+    output_dimensions: [512]
+  quantizer:
+    dimension: 32
+    output_dimension: 512
+`;
+
+      const VOICE_EMBEDDINGS = {
+        alba: 'embeddings/alba.safetensors',
+        marius: 'embeddings/marius.safetensors',
+        javert: 'embeddings/javert.safetensors',
+        jean: 'embeddings/jean.safetensors',
+        fantine: 'embeddings/fantine.safetensors',
+        cosette: 'embeddings/cosette.safetensors',
+        eponine: 'embeddings/eponine.safetensors',
+        azelma: 'embeddings/azelma.safetensors',
+      };
+
+      async function fetchFromHuggingFace(filename, onProgress) {
+        const url = `https://huggingface.co/${HF_REPO}/resolve/main/${filename}`;
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch ${filename}: ${response.status}`);
+        }
+
+        const contentLength = response.headers.get('content-length');
+        if (contentLength && onProgress) {
+          const total = parseInt(contentLength, 10);
+          const reader = response.body.getReader();
+          const chunks = [];
+          let received = 0;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            onProgress(received, total);
+          }
+
+          const combined = new Uint8Array(received);
+          let position = 0;
+          for (const chunk of chunks) {
+            combined.set(chunk, position);
+            position += chunk.length;
+          }
+          return combined;
+        }
+
+        return new Uint8Array(await response.arrayBuffer());
+      }
+
+      async function initialize(onProgress) {
+        if (ttsModel) return;
+
+        try {
+          onProgress('loading', 'Loading WASM module...');
+          console.log('TTS Worker: Loading WASM module via dynamic import');
+
+          wasmModule = await import('./wasm/pocket_tts.js');
+          console.log('TTS Worker: WASM JS loaded, initializing...');
+
+          await wasmModule.default();
+          console.log('TTS Worker: WASM initialized');
+
+          ttsModel = new wasmModule.WasmTTSModel();
+          console.log('TTS Worker: Model instance created');
+
+          onProgress('loading', 'Downloading model (~150MB)...');
+
+          const weights = await fetchFromHuggingFace(MODEL_WEIGHTS_FILE, (received, total) => {
+            const percent = Math.round((received / total) * 100);
+            const mb = (received / 1024 / 1024).toFixed(1);
+            const totalMb = (total / 1024 / 1024).toFixed(1);
+            onProgress('loading', `Downloading model: ${mb}/${totalMb} MB (${percent}%)`);
+          });
+
+          onProgress('loading', 'Initializing model...');
+
+          const configBytes = new TextEncoder().encode(DEFAULT_CONFIG_YAML);
+          const emptyTokenizer = new Uint8Array(0);
+
+          ttsModel.load_from_buffer(configBytes, weights, emptyTokenizer);
+          console.log('TTS Worker: Model loaded successfully');
+          onProgress('ready', 'Model ready');
+        } catch (error) {
+          console.error('TTS Worker: Initialize error:', error);
+          throw error;
+        }
+      }
+
+      async function loadVoice(voiceName, onProgress) {
+        if (currentVoice === voiceName) return;
+
+        const embeddingPath = VOICE_EMBEDDINGS[voiceName];
+        if (!embeddingPath) {
+          throw new Error(`Unknown voice: ${voiceName}`);
+        }
+
+        onProgress('loading', `Loading voice: ${voiceName}...`);
+        const voiceBytes = await fetchFromHuggingFace(embeddingPath);
+        ttsModel.load_voice_from_safetensors(voiceBytes);
+        currentVoice = voiceName;
+        onProgress('ready', `Voice loaded: ${voiceName}`);
+      }
+
+      async function synthesize(text, voiceName, onProgress) {
+        if (!ttsModel) {
+          await initialize(onProgress);
+        }
+
+        if (currentVoice !== voiceName) {
+          await loadVoice(voiceName, onProgress);
+        }
+
+        onProgress('generating', 'Generating speech...');
+        const wavDataUrl = ttsModel.generate_wav_base64(text);
+        return wavDataUrl;
+      }
+
+      // Handle messages from content script (via postMessage from parent)
+      window.addEventListener('message', async (event) => {
+        const { id, action, payload } = event.data || {};
+        if (!id || !action) return;
+
+        console.log('TTS Worker: Received action:', action);
+
+        const sendProgress = (status, text) => {
+          sendToContentScript({ id, type: 'progress', status, text });
+        };
+
+        try {
+          let result;
+
+          switch (action) {
+            case 'initialize':
+              await initialize(sendProgress);
+              result = { success: true };
+              break;
+
+            case 'synthesize':
+              const wavDataUrl = await synthesize(payload.text, payload.voice, sendProgress);
+              result = { success: true, wavDataUrl };
+              break;
+
+            case 'isReady':
+              result = { ready: ttsModel !== null };
+              break;
+
+            default:
+              throw new Error(`Unknown action: ${action}`);
+          }
+
+          sendToContentScript({ id, type: 'result', ...result });
+        } catch (error) {
+          console.error('TTS Worker: Action error:', error);
+          sendToContentScript({ id, type: 'error', error: error.message });
+        }
+      });
+
+      // Signal ready to content script
+      console.log('TTS Worker: Sending ready signal');
+      sendToContentScript({ type: 'worker-ready' });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "pocket-reader",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@jax-js/jax": "^0.1.6",
+    "@jax-js/loaders": "^0.1.0",
+    "@bufbuild/protobuf": "^2.0.0",
+    "sentencepiece-buf": "^0.2.1-0"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.32",
+    "@types/chrome": "^0.0.300",
+    "typescript": "^5.8.3",
+    "vite": "^6.1.0"
+  }
+}

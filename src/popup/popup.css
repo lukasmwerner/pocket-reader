@@ -62,11 +62,11 @@ h1 {
   background: var(--warning-color);
 }
 
-.status-connected .status-dot {
+.status-ready .status-dot {
   background: var(--success-color);
 }
 
-.status-disconnected .status-dot {
+.status-error .status-dot {
   background: var(--error-color);
 }
 
@@ -75,9 +75,27 @@ h1 {
   animation: pulse 1s infinite;
 }
 
+.status-downloading .status-dot {
+  background: var(--primary-color);
+  animation: pulse 1s infinite;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+/* Download Section */
+.download-section {
+  text-align: center;
+  padding: 20px 0;
+}
+
+.download-message {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+  line-height: 1.5;
 }
 
 /* Control Group */
@@ -252,6 +270,10 @@ input[type="range"]::-moz-range-thumb {
 
 .icon-stop::before {
   content: "■";
+}
+
+.icon-download::before {
+  content: "⬇";
 }
 
 /* Progress */

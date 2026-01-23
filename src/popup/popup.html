@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pocket Reader</title>
+  <link rel="stylesheet" href="./popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Pocket Reader</h1>
+      <div id="model-status" class="status status-checking">
+        <span class="status-dot"></span>
+        <span class="status-text">Checking model...</span>
+      </div>
+    </header>
+
+    <main>
+      <!-- Model Download Section (shown when model not cached) -->
+      <div id="download-section" class="download-section hidden">
+        <p class="download-message">TTS model not downloaded yet. Click below to download (~100MB).</p>
+        <button id="btn-download" class="btn btn-primary">
+          <span class="icon icon-download"></span>
+          Download Model
+        </button>
+        <div id="download-progress" class="progress-container hidden">
+          <div class="progress-bar">
+            <div id="download-fill" class="progress-fill"></div>
+          </div>
+          <div id="download-text" class="progress-text">Downloading...</div>
+        </div>
+      </div>
+
+      <!-- Main Controls (shown when model is ready) -->
+      <div id="main-controls" class="hidden">
+        <!-- Voice Selection -->
+        <div class="control-group">
+          <label for="voice-select">Voice</label>
+          <select id="voice-select">
+            <option value="alba">Alba</option>
+            <option value="marius">Marius</option>
+            <option value="javert">Javert</option>
+            <option value="jean">Jean</option>
+            <option value="fantine">Fantine</option>
+            <option value="cosette">Cosette</option>
+            <option value="eponine">Eponine</option>
+            <option value="azelma">Azelma</option>
+          </select>
+        </div>
+
+        <!-- Speed Control -->
+        <div class="control-group">
+          <label for="speed-control">Speed: <span id="speed-value">1.0x</span></label>
+          <input type="range" id="speed-control" min="0.5" max="2.0" step="0.1" value="1.0">
+        </div>
+
+        <!-- Start Position Selection -->
+        <div class="control-group" id="start-position-group">
+          <label for="start-position">Start from</label>
+          <select id="start-position" disabled>
+            <option value="0">Beginning</option>
+          </select>
+          <button id="btn-scan" class="btn-small" title="Scan page for paragraphs">Scan</button>
+        </div>
+
+        <!-- Reading Time Estimate -->
+        <div id="reading-time" class="reading-time hidden">
+          <span id="reading-time-value"></span>
+        </div>
+
+        <!-- Playback Controls -->
+        <div class="playback-controls">
+          <button id="btn-read" class="btn btn-primary" disabled>
+            <span class="icon icon-play"></span>
+            Read Page
+          </button>
+          <button id="btn-pause" class="btn btn-secondary" disabled>
+            <span class="icon icon-pause"></span>
+            Pause
+          </button>
+          <button id="btn-stop" class="btn btn-secondary" disabled>
+            <span class="icon icon-stop"></span>
+            Stop
+          </button>
+        </div>
+
+        <!-- Progress -->
+        <div id="progress-container" class="progress-container hidden">
+          <div class="progress-bar">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+          <div id="progress-text" class="progress-text">Preparing...</div>
+        </div>
+      </div>
+
+      <!-- Status Messages -->
+      <div id="message" class="message hidden"></div>
+    </main>
+
+    <footer>
+      <p class="footer-text">Powered by <a href="https://github.com/kyutai-labs/pocket-tts" target="_blank">Pocket TTS</a> + WebGPU</p>
+    </footer>
+  </div>
+
+  <script type="module" src="./popup.ts"></script>
+</body>
+</html>

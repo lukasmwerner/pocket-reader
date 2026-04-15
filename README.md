@@ -8,7 +8,7 @@ A Chrome extension that reads web page content aloud using [Pocket TTS](https://
 
 - Read any web page content aloud
 - **Paragraph-by-paragraph processing** - audio starts playing quickly even for long documents
-- Multiple voice options (8 different voices)
+- Multiple voice options (8 built-in voices + support for custom cloned voices)
 - Automatic content extraction (focuses on main article content)
 - Simple playback controls (play/stop)
 - Works entirely locally - no cloud services required
@@ -97,6 +97,23 @@ Click "Stop" to stop playback at any time.
 - **Cosette** - Female voice
 - **Eponine** - Female voice
 - **Azelma** - Female voice
+
+## Adding a Custom Voice
+
+You can add your own cloned voice by placing a `.safetensors` embedding in `server/voices/` and registering it in `server/voices.json`:
+
+```json
+{ "id": "my_voice", "name": "My Voice", "path": "voices/my_voice.safetensors" }
+```
+
+Restart the server — the voice will appear in the extension dropdown automatically.
+
+To generate a `.safetensors` from a WAV sample (requires access to [kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts)):
+
+```bash
+cd server
+uv run ../create_voice_embedding.py voices/my_voice.wav voices/my_voice.safetensors
+```
 
 ## API Endpoints
 

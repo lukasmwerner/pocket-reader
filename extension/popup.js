@@ -33,18 +33,15 @@ let scannedParagraphs = [];
  * Initialize popup
  */
 async function init() {
-  // Load saved voice preference
   const { voice, speed } = await chrome.storage.local.get(['voice', 'speed']);
-  if (voice) {
-    voiceSelect.value = voice;
-  }
   if (speed) {
     speedControl.value = speed;
     speedValue.textContent = `${speed}x`;
   }
 
-  // Check server status
+  // Check server status and populate voices from config
   await checkServerStatus();
+  await populateVoices(voice);
 
   // Set up event listeners
   voiceSelect.addEventListener('change', saveVoicePreference);
@@ -103,6 +100,35 @@ async function checkServerStatus() {
 function setServerStatus(status, text) {
   serverStatus.className = `status status-${status}`;
   serverStatus.querySelector('.status-text').textContent = text;
+}
+
+/**
+ * Fetch voices from server and populate the dropdown.
+ * Falls back to the saved preference once options are built.
+ */
+async function populateVoices(savedVoice) {
+  try {
+    const response = await fetch(`${SERVER_URL}/voices`, {
+      signal: AbortSignal.timeout(3000)
+    });
+    const data = await response.json();
+    const voices = data.voices || [];
+    const defaultVoice = data.default || (voices[0] && voices[0].id);
+
+    voiceSelect.innerHTML = '';
+    for (const v of voices) {
+      const opt = document.createElement('option');
+      opt.value = v.id;
+      opt.textContent = v.name;
+      voiceSelect.appendChild(opt);
+    }
+
+    voiceSelect.value = savedVoice && voices.some(v => v.id === savedVoice)
+      ? savedVoice
+      : defaultVoice;
+  } catch {
+    // Server offline — leave dropdown empty, user will see disconnected status
+  }
 }
 
 /**

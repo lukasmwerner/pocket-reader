@@ -1,0 +1,14 @@
+{
+  "voices": [
+    { "id": "alba",       "name": "Alba" },
+    { "id": "marius",     "name": "Marius" },
+    { "id": "javert",     "name": "Javert" },
+    { "id": "jean",       "name": "Jean" },
+    { "id": "fantine",    "name": "Fantine" },
+    { "id": "cosette",    "name": "Cosette" },
+    { "id": "eponine",    "name": "Eponine" },
+    { "id": "azelma",     "name": "Azelma" },
+    { "id": "example_custom", "name": "Example Custom", "path": "voices/example_custom.safetensors" }
+  ],
+  "default": "alba"
+}

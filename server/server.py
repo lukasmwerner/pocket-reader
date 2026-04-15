@@ -7,9 +7,12 @@ Supports streaming audio and multiple voices.
 
 import io
 import json
+import os
 import re
 import wave
 import base64
+import safetensors
+import safetensors.torch
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import numpy as np
@@ -21,8 +24,19 @@ CORS(app)  # Enable CORS for Chrome extension
 _tts_model = None
 _voice_states = {}
 
-# Available voices (these are the predefined catalog voices)
-AVAILABLE_VOICES = ["alba", "marius", "javert", "jean", "fantine", "cosette", "eponine", "azelma"]
+_SERVER_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Load voice config from voices.json
+with open(os.path.join(_SERVER_DIR, "voices.json")) as _f:
+    _voices_config = json.load(_f)
+
+VOICES_LIST = _voices_config["voices"]  # [{"id": ..., "name": ..., "path": ...}, ...]
+DEFAULT_VOICE = _voices_config.get("default", "alba")
+AVAILABLE_VOICES = [v["id"] for v in VOICES_LIST]
+CUSTOM_VOICE_PATHS = {
+    v["id"]: os.path.join(_SERVER_DIR, v["path"])
+    for v in VOICES_LIST if "path" in v
+}
 
 
 SMART_QUOTE_MAP = str.maketrans({
@@ -48,14 +62,44 @@ def get_model():
     return _tts_model
 
 
+def load_custom_voice_state(safetensors_path: str) -> dict:
+    """Load a pre-computed voice state from a .safetensors file.
+
+    1. Calls init_states to register _module_absolute_name on every StatefulModule.
+    2. Loads current_end as-is (tracks how many audio frames were processed).
+    3. Copies saved cache into the first N slots of the fresh 1000-slot cache —
+       the saved cache may be smaller (e.g. 100 slots) and full, so we cannot
+       assign it directly; we need room for generation.
+    """
+    from pocket_tts.modules.stateful_module import init_states
+    model = get_model()
+    state = init_states(model.flow_lm, batch_size=1, sequence_length=1000)
+    with safetensors.safe_open(safetensors_path, framework="pt") as f:
+        for key in f.keys():
+            module_name, tensor_key = key.split("/", 1)
+            if module_name not in state:
+                continue
+            tensor = f.get_tensor(key)
+            if tensor_key == "cache":
+                # saved cache shape: [2, batch, n_slots, heads, d]
+                # fresh cache shape: [2, batch, 1000, heads, d]
+                n = tensor.shape[2]
+                state[module_name]["cache"][:, :, :n, :, :] = tensor
+            else:
+                state[module_name][tensor_key] = tensor
+    return state
+
+
 def get_voice_state(voice_name: str):
     """Get or create a voice state for the given voice."""
     global _voice_states
     if voice_name not in _voice_states:
-        model = get_model()
-        # Use the voice name directly - pocket_tts handles the predefined voices
         print(f"Loading voice: {voice_name}...")
-        _voice_states[voice_name] = model.get_state_for_audio_prompt(voice_name)
+        if voice_name in CUSTOM_VOICE_PATHS:
+            _voice_states[voice_name] = load_custom_voice_state(CUSTOM_VOICE_PATHS[voice_name])
+        else:
+            model = get_model()
+            _voice_states[voice_name] = model.get_state_for_audio_prompt(voice_name)
         print(f"Voice {voice_name} loaded!")
     return _voice_states[voice_name]
 
@@ -164,8 +208,8 @@ def health():
 def list_voices():
     """List available voices."""
     return jsonify({
-        "voices": AVAILABLE_VOICES,
-        "default": "alba"
+        "voices": VOICES_LIST,
+        "default": DEFAULT_VOICE
     })
 
 
@@ -222,16 +266,16 @@ def synthesize():
         return jsonify({"error": "Missing 'text' field"}), 400
     
     text = data['text']
-    voice = data.get('voice', 'alba')
-    
+    voice = data.get('voice', DEFAULT_VOICE)
+
     if not text.strip():
         return jsonify({"error": "Text cannot be empty"}), 400
 
     text = normalize_smart_quotes(text)
-    
+
     if voice not in AVAILABLE_VOICES:
-        voice = 'alba'
-    
+        voice = DEFAULT_VOICE
+
     try:
         model = get_model()
         voice_state = get_voice_state(voice)
@@ -274,7 +318,7 @@ def synthesize_stream():
         return jsonify({"error": "Missing 'text' field"}), 400
 
     text = data['text']
-    voice = data.get('voice', 'alba')
+    voice = data.get('voice', DEFAULT_VOICE)
 
     if not text.strip():
         return jsonify({"error": "Text cannot be empty"}), 400
@@ -282,7 +326,7 @@ def synthesize_stream():
     text = normalize_smart_quotes(text)
 
     if voice not in AVAILABLE_VOICES:
-        voice = 'alba'
+        voice = DEFAULT_VOICE
 
     def generate_stream():
         try:

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+
+# UV lockfile (optional — commit if you want reproducible installs)
+# uv.lock
+
+# Custom voice embeddings — generated locally, not for distribution
+server/voices/*.safetensors
+server/voices/*.wav
+
+# Model weights cache (downloaded at runtime by pocket-tts)
+*.safetensors
+!server/voices.json
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Logs and temp output
+*.log
+output.wav
+/tmp/
